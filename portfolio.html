@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portfolio</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: Arial, sans-serif; background: #2a2a2a; padding: 20px; color:#e0e0e0; }
+.container { max-width: 1200px; margin:0 auto; }
+h1 { text-align:center; font-size:2.5rem; margin-bottom:5px; }
+h2 { text-align:center; font-size:1.2rem; margin-bottom:40px; color:#ccc; }
+.gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:20px; }
+.artwork { background:#505050; aspect-ratio:3/4; cursor:pointer; border-radius:8px; overflow:hidden; transition: transform 0.3s, box-shadow 0.3s; display:flex; align-items:center; justify-content:center; font-size:1.2rem; color:#fff; position: relative; }
+.artwork:hover { transform: translateY(-5px); box-shadow:0 10px 25px rgba(255,255,255,0.1); }
+.artwork img { width:100%; height:100%; object-fit:cover; display:block; }
+.artwork.loading { opacity: 0.6; }
+.artwork.error { background: #704444; color: #ffaaaa; text-align: center; padding: 20px; }
+.pdf-label { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.7); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; }
+.modal { display:none; position:fixed; z-index:1000; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.9); align-items:center; justify-content:center; }
+.modal.show { display:flex; }
+.modal-content { max-width:95%; max-height:95%; position:relative; }
+.modal-content img { width:100%; height:auto; border-radius:8px; max-height: 90vh; object-fit: contain; }
+.close { position:absolute; top:-40px; right:0; font-size:28px; font-weight:bold; cursor:pointer; color:#fff; z-index: 1001; }
+.close:hover { color: #ccc; }
+#pdfViewer { display:none; text-align:center; }
+#pdfCanvas { max-width:100%; max-height: 80vh; border-radius:8px; background:#333; }
+#pdfNav { margin-top:15px; display: flex; align-items: center; justify-content: center; gap: 15px; }
+#pdfNav button { background:#505050; color:#fff; border:none; border-radius:6px; padding:8px 16px; cursor:pointer; font-size: 14px; }
+#pdfNav button:hover { background:#6a6a6a; }
+#pdfNav button:disabled { background:#333; cursor: not-allowed; opacity: 0.5; }
+#pageInfo { color:#e0e0e0; font-size:1rem; min-width: 120px; }
+.loading-spinner { border: 3px solid #333; border-top: 3px solid #fff; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+.error-message { color: #ffaaaa; text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>Portfolio</h1>
+  <h2>Magdalena Davidović</h2>
+  <div class="gallery" id="gallery"></div>
+</div>
+
+<div id="modal" class="modal">
+  <div class="modal-content">
+    <span class="close" id="closeModal">&times;</span>
+    <img id="modalImage" src="" alt="" style="display:none;">
+    <div id="pdfViewer">
+      <div class="loading-spinner" id="pdfLoading"></div>
+      <canvas id="pdfCanvas" style="display:none;"></canvas>
+      <div id="pdfNav" style="display:none;">
+        <button id="prevPage">← Previous</button>
+        <span id="pageInfo"></span>
+        <button id="nextPage">Next →</button>
+      </div>
+      <div id="pdfError" class="error-message" style="display:none;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Configure PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const artworks = [
+  { id: 1, src: "https://raw.githubusercontent.com/magdalenadavidovic/magdalenadavidovic/main/crtez1.png", type: "image", title: "Drawing 1" },
+  { id: 2, src: "https://raw.githubusercontent.com/magdalenadavidovic/magdalenadavidovic/main/crtez2.png", type: "image", title: "Drawing 2" },
+  { id: 3, src: "https://raw.githubusercontent.com/magdalenadavidovic/magdalenadavidovic/main/crtez3.png", type: "image", title: "Drawing 3" },
+  { id: 4, src: "https://raw.githubusercontent.com/magdalenadavidovic/magdalenadavidovic/main/%C5%A0estar%20Magdalena%20Davidovi%C4%87%20druge%20verzije.pdf", type: "pdf", title: "Document 1" },
+  { id: 5, src: "https://raw.githubusercontent.com/magdalenadavidovic/magdalenadavidovic/main/magdalena%20davidovic%20med_compressed.pdf", type: "pdf", title: "Document 2" },
+  { id: 6, src: "https://raw.githubusercontent.com/magdalenadavidovic/magdalenadavidovic/main/kalendari%20magdalena%20davidovic%204.b.pdf", type: "pdf", title: "Calendar" }
+];
+
+const gallery = document.getElementById('gallery');
+const modal = document.getElementById('modal');
+const modalImage = document.getElementById('modalImage');
+const closeModal = document.getElementById('closeModal');
+const pdfViewer = document.getElementById('pdfViewer');
+const pdfCanvas = document.getElementById('pdfCanvas');
+const pdfLoading = document.getElementById('pdfLoading');
+const pdfNav = document.getElementById('pdfNav');
+const pdfError = document.getElementById('pdfError');
+const prevPageBtn = document.getElementById('prevPage');
+const nextPageBtn = document.getElementById('nextPage');
+const pageInfo = document.getElementById('pageInfo');
+
+let pdfDoc = null, pageNum = 1, pageCount = 1, pageRendering = false, pageNumPending = null;
+
+// Create thumbnails
+artworks.forEach(artwork => {
+  const div = document.createElement('div');
+  div.className = 'artwork';
+  div.onclick = () => openModal(artwork.src, artwork.type, artwork.title);
+  
+  if (artwork.type === 'image') {
+    div.classList.add('loading');
+    const img = document.createElement('img');
+    img.onload = () => div.classList.remove('loading');
+    img.onerror = () => {
+      div.classList.remove('loading');
+      div.classList.add('error');
+      div.innerHTML = `<div>Image failed to load<br><small>${artwork.title}</small></div>`;
+    };
+    img.src = artwork.src;
+    img.alt = artwork.title;
+    div.appendChild(img);
+  } else {
+    div.innerHTML = `<div>📄 PDF<div class="pdf-label">PDF</div></div>`;
+  }
+  
+  gallery.appendChild(div);
+});
+
+function openModal(src, type, title) {
+  currentPdfUrl = src; // Store current URL for direct link fallback
+  
+  if (type === 'image') {
+    // Try to load image through fetch first
+    fetch(src, { mode: 'cors' })
+      .then(response => {
+        if (!response.ok) throw new Error('Network response was not ok');
+        return response.blob();
+      })
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        modalImage.src = url;
+        modalImage.onload = () => URL.revokeObjectURL(url);
+        modalImage.style.display = 'block';
+        pdfViewer.style.display = 'none';
+      })
+      .catch(() => {
+        // Fallback to direct image loading
+        modalImage.src = src;
+        modalImage.style.display = 'block';
+        pdfViewer.style.display = 'none';
+        modalImage.onerror = () => {
+          modalImage.style.display = 'none';
+          pdfViewer.style.display = 'block';
+          showPdfError('Image cannot be loaded due to CORS restrictions.');
+        };
+      });
+  } else {
+    modalImage.style.display = 'none';
+    pdfViewer.style.display = 'block';
+    loadPdf(src);
+  }
+  modal.classList.add('show');
+}
+
+function showPdfError(message) {
+  pdfLoading.style.display = 'none';
+  pdfCanvas.style.display = 'none';
+  pdfNav.style.display = 'none';
+  pdfError.style.display = 'block';
+  pdfError.textContent = message;
+}
+
+function showPdfSuccess() {
+  pdfLoading.style.display = 'none';
+  pdfError.style.display = 'none';
+  pdfCanvas.style.display = 'block';
+  pdfNav.style.display = 'flex';
+}
+
+async function loadPdf(url) {
+  try {
+    pdfLoading.style.display = 'block';
+    pdfCanvas.style.display = 'none';
+    pdfNav.style.display = 'none';
+    pdfError.style.display = 'none';
+
+    // Add cache buster and CORS handling
+    const pdfUrl = url + '?t=' + Date.now();
+    
+    const loadingTask = pdfjsLib.getDocument({
+      url: pdfUrl,
+      withCredentials: false,
+      disableCreateObjectURL: true
+    });
+    
+    pdfDoc = await loadingTask.promise;
+    pageCount = pdfDoc.numPages;
+    pageNum = 1;
+    
+    await renderPage(1);
+    showPdfSuccess();
+    
+  } catch (error) {
+    console.error('PDF loading error:', error);
+    showPdfError('Failed to load PDF. The file may be temporarily unavailable or corrupted.');
+  }
+}
+
+async function renderPage(num) {
+  if (pageRendering) {
+    pageNumPending = num;
+    return;
+  }
+  
+  pageRendering = true;
+  
+  try {
+    const page = await pdfDoc.getPage(num);
+    const scale = Math.min(1.5, window.innerWidth / page.getViewport({scale: 1}).width * 0.8);
+    const viewport = page.getViewport({scale: scale});
+    
+    pdfCanvas.height = viewport.height;
+    pdfCanvas.width = viewport.width;
+    
+    const ctx = pdfCanvas.getContext('2d');
+    ctx.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+    
+    const renderTask = page.render({
+      canvasContext: ctx,
+      viewport: viewport
+    });
+    
+    await renderTask.promise;
+    
+    pageNum = num;
+    pageInfo.textContent = `Page ${num} of ${pageCount}`;
+    
+    // Update button states
+    prevPageBtn.disabled = (pageNum <= 1);
+    nextPageBtn.disabled = (pageNum >= pageCount);
+    
+  } catch (error) {
+    console.error('Page rendering error:', error);
+  }
+  
+  pageRendering = false;
+  
+  if (pageNumPending !== null) {
+    renderPage(pageNumPending);
+    pageNumPending = null;
+  }
+}
+
+function queueRender(num) {
+  if (num < 1 || num > pageCount) return;
+  
+  if (pageRendering) {
+    pageNumPending = num;
+  } else {
+    renderPage(num);
+  }
+}
+
+// Event listeners
+prevPageBtn.onclick = () => {
+  if (pdfDoc && pageNum > 1) {
+    queueRender(pageNum - 1);
+  }
+};
+
+nextPageBtn.onclick = () => {
+  if (pdfDoc && pageNum < pageCount) {
+    queueRender(pageNum + 1);
+  }
+};
+
+function closeModalFunc() {
+  modal.classList.remove('show');
+  modalImage.src = "";
+  modalImage.style.display = 'none';
+  pdfViewer.style.display = 'none';
+  pdfLoading.style.display = 'none';
+  pdfCanvas.style.display = 'none';
+  pdfNav.style.display = 'none';
+  pdfError.style.display = 'none';
+  
+  // Clean up PDF resources
+  if (pdfDoc) {
+    pdfDoc.destroy();
+    pdfDoc = null;
+  }
+  
+  pageNum = 1;
+  pageCount = 1;
+  pageRendering = false;
+  pageNumPending = null;
+}
+
+closeModal.onclick = closeModalFunc;
+modal.onclick = e => { 
+  if (e.target === modal) closeModalFunc(); 
+};
+
+document.addEventListener('keydown', e => { 
+  if (e.key === 'Escape') {
+    closeModalFunc();
+  } else if (modal.classList.contains('show') && pdfViewer.style.display !== 'none') {
+    if (e.key === 'ArrowLeft') prevPageBtn.click();
+    if (e.key === 'ArrowRight') nextPageBtn.click();
+  }
+});
+
+// Keyboard navigation info
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('Portfolio loaded. Use arrow keys to navigate PDF pages when viewing PDFs.');
+});
+</script>
+
+</body>
+</html>
